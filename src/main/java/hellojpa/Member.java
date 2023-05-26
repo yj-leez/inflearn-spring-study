@@ -2,10 +2,7 @@ package hellojpa;
 
 import javax.persistence.*;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
-import java.util.Locale;
+import java.util.*;
 
 @Entity  //JPA가 관리하는 객체, JPA 사용해서 테이블과 매핑할 객체임을 알려줌
 //@Table(name = "MBR") 테이블 이름을 "MBR"로 지정. insert MBR 이렇게 인서트 쿼리 나감
@@ -24,10 +21,34 @@ public class Member extends BaseEntity{
     private Long id;
 
 //    @Column(unique = true, length = 10) name 필수, 10자 초과x, 실행 로직에는 영향x
-    @Column(name = "USERNAME")
+    @Column(name = "USERNAME_ID")
     private String username;
+    //period
+    @Embedded
+    private Period workPeriod;
 
-    @ManyToOne
+    //address
+    @Embedded
+    private Address homeAddress;
+
+    @ElementCollection
+    @CollectionTable(name = "FAVORITE_FOOD", joinColumns =
+            @JoinColumn(name = "MEMBER_ID")
+    )
+    @Column(name = "FOOD_NAME") //예외적으로 허용되는 것
+    private Set<String> favoriteFoods = new HashSet<>();
+
+//    @ElementCollection
+//    @CollectionTable(name = "ADDRESS", joinColumns =
+//            @JoinColumn(name = "MEMBER_ID")
+//    )
+//    private List<Address> addressHistory = new ArrayList<>();
+    @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true) // 값타입으로 쓰는 것보다 일대다 관계 고려
+    @JoinColumn(name = "MEMBER_ID")
+    private List<AddressEntity> addressHistory = new ArrayList<>();
+
+
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "TEAM_ID", insertable = false, updatable = false) // 일대다 양방향, 업뎃x, 공식적으로 존재x
     private Team team;
 
@@ -81,7 +102,31 @@ public class Member extends BaseEntity{
         this.username = username;
     }
 
-//    public Team getTeam() {
+    public Set<String> getFavoriteFoods() {
+        return favoriteFoods;
+    }
+
+    public void setFavoriteFoods(Set<String> favoriteFoods) {
+        this.favoriteFoods = favoriteFoods;
+    }
+
+    public List<AddressEntity> getAddressHistory() {
+        return addressHistory;
+    }
+
+    public void setAddressHistory(List<AddressEntity> addressHistory) {
+        this.addressHistory = addressHistory;
+    }
+
+    public Address getHomeAddress() {
+        return homeAddress;
+    }
+
+    public void setHomeAddress(Address homeAddress) {
+        this.homeAddress = homeAddress;
+    }
+
+    //    public Team getTeam() {
 //        return team;
 //    }
 //
