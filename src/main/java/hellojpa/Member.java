@@ -21,8 +21,10 @@ public class Member extends BaseEntity{
     private Long id;
 
 //    @Column(unique = true, length = 10) name 필수, 10자 초과x, 실행 로직에는 영향x
-    @Column(name = "USERNAME_ID")
+    @Column(name = "USERNAME")
     private String username;
+
+    private int age;
     //period
     @Embedded
     private Period workPeriod;
@@ -100,6 +102,22 @@ public class Member extends BaseEntity{
 
     public void setUsername(String username) {
         this.username = username;
+    }
+
+    public int getAge() {
+        return age;
+    }
+
+    public void setAge(int age) {
+        this.age = age;
+    }
+
+    public Team getTeam() {
+        return team;
+    }
+
+    public void setTeam(Team team) {
+        this.team = team;
     }
 
     public Set<String> getFavoriteFoods() {
