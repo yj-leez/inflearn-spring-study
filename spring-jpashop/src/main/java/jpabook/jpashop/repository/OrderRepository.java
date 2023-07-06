@@ -82,4 +82,15 @@ public class OrderRepository {
                         " join o.delivery d", OrderSimpleQueryDto.class)
                 .getResultList();
     }
+
+
+    public List<Order> findAllWithItem() {
+        return em.createQuery(
+                "select distinct o from Order o" + //distinct의 역할: DB에서는 이전과 같이 값이 나오지만 애플리케이션에 가져올 때 중복제거
+                        " join fetch o.member m" +
+                        " join fetch o.delivery d" +
+                        " join fetch o.orderItems oi" +
+                        " join fetch oi.item i", Order.class)
+                .getResultList();
+    }
 }
