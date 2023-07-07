@@ -1,5 +1,6 @@
 package jpabook.jpashop.domain.item;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jpabook.jpashop.domain.Category;
 import jpabook.jpashop.exception.NotEnoughStockException;
 import lombok.Getter;
