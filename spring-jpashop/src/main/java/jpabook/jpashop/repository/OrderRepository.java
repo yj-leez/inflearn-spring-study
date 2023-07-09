@@ -1,8 +1,11 @@
 package jpabook.jpashop.repository;
 
-import jpabook.jpashop.domain.Member;
+import com.querydsl.core.types.dsl.BooleanExpression;
+import com.querydsl.jpa.impl.JPAQueryFactory;
+import jpabook.jpashop.domain.*;
 import jpabook.jpashop.domain.Order;
 import lombok.RequiredArgsConstructor;
+import org.aspectj.weaver.ast.Or;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
@@ -65,6 +68,30 @@ public class OrderRepository {
         TypedQuery<Order> query = em.createQuery(cq).setMaxResults(1000); //최대 1000건
         return query.getResultList();
     }
+
+    public List<Order> findAll_QueryDSL(OrderSearch orderSearch){
+        Q
+        QOrder order = QOrder.order;
+        QMember member = QMember.member;
+
+        JPAQueryFactory query = new JPAQueryFactory(em);
+        return query.select(order)
+                .from(order)
+                .join(order.member, member)
+                .where(statusEq(orderSearch.getOrderStatus()),namelike(orderSearch.getMemberName()))
+                .limit(1000)
+                .fetch();
+    }
+    private BooleanExpression namelike(String name){
+        if(!StringUtils.hasText(name)) return null;
+        return QMember.member.name.like(name);
+    }
+    private BooleanExpression statusEq(OrderStatus statusCond){
+        if(statusCond == null) return null;
+        return QOrder.order.status.eq(statusCond);
+    }
+
+
 
     public List<Order> findAllWithMemberDelivery(){
         return em.createQuery("select o from Order o" +
