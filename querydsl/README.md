@@ -343,3 +343,237 @@ JPA JPQL 서브쿼리의 한계점으로 from 절의 서브쿼리(인라인 뷰)
 ## Case
 
 김영한선생님은 case조건같은건 디비에서 하기보다는 애플리케이션 로직에서 하는 걸 권장
+
+
+# 2주차
+
+# 섹션 4 중급 문법
+
+## 프로젝션과 결과 반환 - 기본
+
+### 프로젝션 결과가 둘 이상일 때 Tuple로 조회
+
+```java
+List<Tuple> result = queryFactory
+         .select(member.username, member.age)
+         .from(member)
+         .fetch();
+```
+
+- Tuple로 조회했다면 Service 단에는 Dto로 변환해서 나가는 것을 추천
+
+## **프로젝션과 결과 반환** - DTO **조회**
+
+### JPQL로 조회
+
+```java
+List<MemberDto> result = em.createQuery(
+         "select new study.querydsl.dto.MemberDto(m.username, m.age) " +
+             "from Member m", MemberDto.class)
+     .getResultList();
+```
+
+- DTO의 package이름을 다 적어줘야해서 지저분함
+- 생성자 방식만 지원함
+
+↓ QueryDsl은 이 문제들을 해결
+
+### 프로퍼티 접근 - Setter
+
+```java
+List<MemberDto> result = queryFactory
+         .select(Projections.bean(MemberDto.class,
+                 member.username,
+                 member.age))
+         .from(member).fetch();
+```
+
+- 기본 생성자로 만들고 setter로 값 주입
+
+### 필드 직접 접근
+
+```java
+List<MemberDto> result = queryFactory
+         .select(Projections.fields(MemberDto.class,
+        member.username,
+        member.age))
+.from(member)
+.fetch();
+```
+
+- 기본 생성자로 만들고 필드 주입
+- 필드명이 다를 시 (eg. `name`) `member.username.as("name")` 와 같이 필드에 별칭을 적용해야 함
+    
+    → 별칭 적용하지 않는 경우 null 값 들어감
+    
+    - 다른 방법 `ExpressionUtils.as(source,alias)` 도 있음
+        
+        ```java
+        List<UserDto> result = queryFactory
+               .select(Projections.fields(UserDto.class,
+                      member.username.as("name"),
+                      ExpressionUtils.as(JPAExpressions
+                               .select(memberSub.age.max())
+                               .from(memberSub), "age")))
+                .from(member)
+                .fetch();
+        ```
+        
+
+### 생성자 사용
+
+```java
+List<MemberDto> result = queryFactory
+         .select(Projections.constructor(MemberDto.class,
+                 member.username,
+                 member.age))
+         .from(member)
+				 .fetch();
+```
+
+- 생성자의 파라미터 순서와 일치해야함
+
+## **프로젝션과 결과 반환** - @QueryProjection
+
+Dto의 Constructor에 `@QueryProjection` 붙여주고 ./gradlew CompileJava 실행 후
+
+```java
+@QueryProjection
+public MemberDto(String username, int age) {
+    this.username = username;
+    this.age = age;
+}
+```
+
+```java
+List<MemberDto> result = queryFactory
+         .select(new QMemberDto(member.username, member.age))
+         .from(member)
+         .fetch();
+```
+
+- 기본 Constructor을 사용할 땐 파라미터 에러가 있더라도 런타임 시 에러 발견하지만
+    
+    @QueryProjection 사용 시 컴파일 시에도 에러 발견 가능
+    
+    → 가장 안전한 방법
+    
+- 하지만 DTO까지 Q 파일을 생성해야 하는 단점, 아키텍처적으로 고민해봐야할 사안이 있음
+
+## 동적 쿼리 - BooleanBuilder 사용
+
+```java
+@Test
+public void dynamicQuery_BooleanBuilder(){
+    String usernameParam = "member1";
+    Integer ageParam = null;
+
+    List<Member> result = searchMember1(usernameParam, ageParam);
+    assertThat(result.size()).isEqualTo(1);
+}
+
+private List<Member> searchMember1(String usernameCond, Integer ageCond) {
+
+     BooleanBuilder builder = new BooleanBuilder(); // 초기 조건 넣을 수 있음
+     if (usernameCond != null) {
+        builder.and(member.username.eq(usernameCond)); // and나 or로 조립가능
+     }
+     if (ageCond != null){
+        builder.and(member.age.eq(ageCond));
+     }
+
+     return queryFactory
+                .selectFrom(member)
+                .where(builder)
+                .fetch();
+}
+```
+
+- where 절을 한 번에 보기 어렵다는 단점 존재
+- and나 or을 사용하여 조건을 조립할 수 있음
+
+## 동적 쿼리 - Where 다중 파라미터 사용
+
+```java
+@Test
+public void dynamicQuery_WhereParam(){
+    String usernameParam = "member1";
+    Integer ageParam = 10;
+
+    List<Member> result = searchMember2(usernameParam, ageParam);
+    assertThat(result.size()).isEqualTo(1);
+}
+
+private List<Member> searchMember2(String usernameCond, Integer ageCond) {
+    return queryFactory
+                .selectFrom(member)
+                .where(usernameEq(usernameCond), ageEq(ageCond))
+                .fetch();
+}
+
+private BooleanExpression usernameEq(String usernameCond) {
+    return usernameCond == null ? null : member.username.eq(usernameCond);
+}
+
+private BooleanExpression ageEq(Integer ageCond) {
+    return ageCond == null ? null : member.age.eq(ageCond);
+}
+
+private BooleanExpression allEq(String usernameCond, Integer ageCond) {
+    return usernameEq(usernameCond).and(ageEq(ageCond));
+}
+```
+
+- BooleanExpression을 사용하여 객체들을 조립할 수 있음 → `allEq()`
+
+## 수정, 삭제 벌크 연산
+
+```java
+long count = queryFactory
+         .update(member)
+			   .set(member.username, "비회원") 
+	       .where(member.age.lt(28)) .execute();
+```
+
+- 쿼리 한 번으로 대량의 데이터를 수정이 가능하지만
+    
+    영속성 컨텍스트를 거치지 않고 디비에 바로 쿼리를 날림
+    
+    → 데이터의 일관성이 무시됨
+    
+    → 추후 DB에서 조회해와도 영속성 컨텍스트에 데이터가 남아있으면 조회해 온 값을 무시하고 영속성 컨텍스트에 있는 엔티티를 취함 → 문제 발생
+    
+    ⇒ 해결 방안: 쿼리 날린 후 영속성 컨텍스트를 flush, clear하자
+    
+    ```java
+    em.flush();
+    em.clear();
+    ```
+    
+
+```java
+long count = queryFactory
+         .update(member)
+         .set(member.age, member.age.add(1))
+         .execute();
+```
+
+- 내장함수를 사용해도 됨
+
+## SQL function 호출
+
+```java
+String result = queryFactory
+         .select(member.username)
+				 .from(member)
+				 .where(member.username.eq(Expressions.stringTemplate("function('lower', {0})",
+ member.username)))
+```
+
+- SQL function은 JPA와 같이 Dialect에 등록된 내용만 호출 가능
+
+```java
+.where(member.username.eq(member.username.lower()))
+```
+
+- lower 같은 ansi 표준 함수들은 querydsl이 내장하고 있는 함수를 사용 가능
