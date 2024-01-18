@@ -577,3 +577,228 @@ String result = queryFactory
 ```
 
 - lower 같은 ansi 표준 함수들은 querydsl이 내장하고 있는 함수를 사용 가능
+
+# 3주차, 4주차
+
+# 섹션 5. **실무 활용** - **순수** JPA**와** Querydsl
+
+## **동적 쿼리와 성능 최적화 조회** - Builder **사용**
+
+```java
+BooleanBuilder builder = new BooleanBuilder();
+     if (hasText(condition.getUsername())) {
+         builder.and(member.username.eq(condition.getUsername()));
+     }
+     if (hasText(condition.getTeamName())) {
+         builder.and(team.name.eq(condition.getTeamName()));
+     }
+     if (condition.getAgeGoe() != null) {
+         builder.and(member.age.goe(condition.getAgeGoe()));
+     }
+     if (condition.getAgeLoe() != null) {
+         builder.and(member.age.loe(condition.getAgeLoe()));
+}
+```
+
+- `.where(builder)` 로 동적 쿼리 검색
+
+## **동적 쿼리와 성능 최적화 조회** - Where**절 파라미터 사용**
+
+```java
+private BooleanExpression usernameEq(String username) {
+     return isEmpty(username) ? null : member.username.eq(username);
+}
+ private BooleanExpression teamNameEq(String teamName) {
+     return isEmpty(teamName) ? null : team.name.eq(teamName);
+}
+ private BooleanExpression ageGoe(Integer ageGoe) {
+     return ageGoe == null ? null : member.age.goe(ageGoe);
+}
+ private BooleanExpression ageLoe(Integer ageLoe) {
+     return ageLoe == null ? null : member.age.loe(ageLoe);
+}
+```
+
+- `.where(usernameEq(condition.getUsername()),teamNameEq(condition.getTeamName()),
+        ageGoe(condition.getAgeGoe()),
+        ageLoe(condition.getAgeLoe()))` 로 동적  쿼리 검색
+- 조건 재사용이 가능한 것이 장점
+
+# 섹션 6. **실무 활용** - **스프링 데이터** JPA**와** Querydsl
+
+## **사용자 정의 리포지토리**
+
+### **사용자 정의 리포지토리 사용법**
+
+1. 사용자 정의 인터페이스 작성
+2. 사용자 정의 인터페이스 구현
+3. 스프링 데이터 리포지토리에 사용자 정의 인터페이스 상속
+
+<img width="1000" alt="1" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/317b67c9-6483-4906-b7e3-f1ae0684692e">
+
+
+- Impl 레포지토리 예시
+
+```java
+public class MemberRepositoryImpl implements MemberRepositoryCustom {
+
+    private final JPAQueryFactory queryFactory;
+
+    public MemberRepositoryImpl(EntityManager em) {
+        this.queryFactory = new JPAQueryFactory(em);
+		}
+		@Override
+		public List<MemberTeamDto> search(MemberSearchCondition condition) { }
+}
+```
+
+## **스프링 데이터 페이징 활용**1 - Querydsl **페이징 연동**
+
+### **전체 카운트를 한번에 조회하는 단순한 방법**
+
+- searchPageSimple(), fetchResults() 사용
+
+```java
+@Override
+public Page<MemberTeamDto> searchPageSimple(MemberSearchCondition condition, Pageable pageable) {
+			QueryResults<MemberTeamDto> results = queryFactory
+                .select(new QMemberTeamDto(
+                        member.id.as("memberId"),
+                        member.username,
+                        member.age,
+                        team.id.as("teamId"),
+                        team.name.as("teamName")))
+                .from(member)
+                .leftJoin(member.team, team)
+                .where(usernameEq(condition.getUsername()),
+                        teamNameEq(condition.getTeamName()),
+                        ageGoe(condition.getAgeGoe()),
+                        ageLoe(condition.getAgeLoe())
+                )
+                .offset(pageable.getOffset())
+                .limit(pageable.getPageSize())
+                .fetchResults();
+
+        List<MemberTeamDto> content = results.getResults();
+        long total = results.getTotal();
+
+        return new PageImpl<>(content, pageable, total);
+}
+```
+
+- `fetchResults()`를 사용하면 한 번에 조회하는 것 같지만 실제로는 쿼리 두 번 호출, 단 카운트 쿼리 시에는 `order by`는 제거함
+
+### **데이터 내용과 전체 카운트를 별도로 조회하는 방법**
+
+```java
+@Override
+public Page<MemberTeamDto> searchPageComplex(MemberSearchCondition condition,
+Pageable pageable) {
+    List<MemberTeamDto> content = queryFactory
+            .select(new QMemberTeamDto(
+                    member.id,
+                    member.username,
+                    member.age,
+                    team.id,
+                    team.name))
+            .from(member)
+            .leftJoin(member.team, team)
+            .where(usernameEq(condition.getUsername()),
+                    teamNameEq(condition.getTeamName()),
+                    ageGoe(condition.getAgeGoe()),
+                    ageLoe(condition.getAgeLoe()))
+            .offset(pageable.getOffset())
+            .limit(pageable.getPageSize())
+            .fetch();
+    long total = queryFactory
+            .select(member)
+            .from(member)
+            .leftJoin(member.team, team)
+            .where(usernameEq(condition.getUsername()),
+                    teamNameEq(condition.getTeamName()),
+                    ageGoe(condition.getAgeGoe()),
+                    ageLoe(condition.getAgeLoe()))
+            .fetchCount();
+    return new PageImpl<>(content, pageable, total);
+}
+```
+
+- 카운트 쿼리 시에는 불필요한 조인을 제거할 수 있으므로 위의 방법보다 최적화할 수 있음
+
+## **스프링 데이터 페이징 활용**2 - CountQuery **최적화**
+
+- PageableExecutionUtils.getPage()로 최적화
+****
+
+```java
+JPAQuery<Member> countQuery = queryFactory
+        .select(member)
+        .from(member)
+        .leftJoin(member.team, team)
+        .where(usernameEq(condition.getUsername()),
+                teamNameEq(condition.getTeamName()),
+                ageGoe(condition.getAgeGoe()),
+                ageLoe(condition.getAgeLoe()));
+ 
+        return PageableExecutionUtils.getPage(content, pageable,
+countQuery::fetchCount);
+```
+
+- count 쿼리가 생략 가능한 경우 생략해서 처리
+    - 페이지 시작이면서 컨텐츠 사이즈가 페이지 사이즈보다 작을 때
+    - 마지막 페이지 일 때 (offset + 컨텐츠 사이즈를 더해서 전체 사이즈 구함, 더 정확히는 마지막 페이지이면서 컨텐츠 사이즈가 페이지 사이즈보다 작을 때)
+
+# 7. **스프링 데이터** JPA**가 제공하는** Querydsl **기능**
+
+## Querydsl **지원 클래스 직접 만들기**
+
+- 스프링 데이터가 제공하는 `QuerydslRepositorySupport` 가 지닌 한계를 극복하기 위해 Querydsl 지원 클래스 직접 생성
+
+```java
+study/querydsl/repository/support/Querydsl4RepositorySupport 참고
+```
+
+- 다음과 같이 사용 가능
+
+```java
+@Repository
+public class MemberTestRepository extends Querydsl4RepositorySupport {
+     public MemberTestRepository() {
+         super(Member.class);
+		}
+
+		public Page<Member> applyPagination2(MemberSearchCondition condition,
+		Pageable pageable) {
+        return applyPagination(pageable, contentQuery -> contentQuery
+                        .selectFrom(member)
+                        .leftJoin(member.team, team)
+                        .where(usernameEq(condition.getUsername()),
+                                teamNameEq(condition.getTeamName()),
+                                ageGoe(condition.getAgeGoe()),
+                                ageLoe(condition.getAgeLoe())),
+			countQuery -> countQuery
+				.selectFrom(member)
+				.leftJoin(member.team, team)
+				.where(usernameEq(condition.getUsername()),
+					teamNameEq(condition.getTeamName()),
+					ageGoe(condition.getAgeGoe()),
+					ageLoe(condition.getAgeLoe())));
+
+    private BooleanExpression usernameEq(String username) {
+        return isEmpty(username) ? null : member.username.eq(username);
+		}
+    private BooleanExpression teamNameEq(String teamName) {
+        return isEmpty(teamName) ? null : team.name.eq(teamName);
+		}
+    private BooleanExpression ageGoe(Integer ageGoe) {
+        return ageGoe == null ? null : member.age.goe(ageGoe);
+		}
+    private BooleanExpression ageLoe(Integer ageLoe) {
+        return ageLoe == null ? null : member.age.loe(ageLoe);
+		}
+}
+```
+
+- 스프링 데이터가 제공하는 페이징을 편리하게 변환
+- 페이징과 카운트 쿼리 분리 가능
+- 스프링 데이터 Sort 지원
