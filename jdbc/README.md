@@ -101,3 +101,314 @@ Connection connection = DriverManager.getConnection(URL, USERNAME,PASSWORD);
 ### JDBC 개발
 
 등록, 조회, 수정, 삭제와 같은 CRUD는`src/main/java/hello/jdbc/repository/MemberRepositoryV1.java` 에서 확인할 수 있다.
+
+# 2. 커넥션풀과 데이터 소스 이해
+
+`애플리케이션 서버와 DB- 일반적인 사용법`을 참고하면, 매번 커넥션을 새로 만들어 반환하는 과정은 복잡하고 시간도 많이 많이 소모되는 일임을 알 수 있다. DB는 물론이고 애플리케이션 서버에서도 **TCP/IP 커넥션**을 새로 생성하기 위한 리소스를 매번 사용해야 한다.
+
+이런 문제를 해결하기 위해 ***커넥션 풀***이라는 개념이 등장하였다. 대표적인 커넥션 풀 오픈소스는 `commons-dbcp2` , `tomcat-jdbc pool` , `HikariCP` 등이 있다. 성능과 사용의 편리함 측면에서 최근에는 hikariCP를 주로 사용하고, 스프링 부트 2.0 부터 또한 기본 커넥션 풀로 hikariCP를 제공한다.
+
+### 커넥션 풀
+
+<img width="818" alt="1" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/04aebeef-bf12-46b8-a484-dd0cc6445fa2">
+
+애플리케이션을 시작할 때 커넥션 풀은 필요한 만큼 커넥션을 미리 확보해서 풀에 보관한다. 보통 얼마나 보관할 지는 서비스의 특징과 서버 스펙에 따라 다르지만 기본값은 보통 10개이고 Spring boot - mysql 커넥션 풀도 디폴트 값은 10개이다.
+
+이 풀에 들어있는 커넥션들은 TCP/IP로 DB와 커넥션이 연결되어 있는 상태이기 때문에 언제든지 즉시 SQL을 DB에 전달할 수 있다.
+
+이제 드라이버에서 새로운 커넥션을 획득하는 것이 아닌, ***커넥션 풀을 통해 이미 생성되어 있는 커넥션을 객체 참조로 그냥 가져다 쓰기만 하면 된다.***
+
+### 이상적인 풀의 크기
+
+적절한 커넥션 풀 숫자는 서비스의 특징과 애플리케이션 서버 스펙, DB 서버 스펙에 따라 다르기 때문에 성능 테
+스트를 통해서 정해야 한다.
+	
+여기 `@GeneratedValue(strategy = GenerationType.AUTO)` 어노테이션을 사용하면서 id를 받기 위해 hibernate_sequence 테이블을 조회, update를 하면서 sub transaction이 생성∙실행되는데, 이 추가적인  커넥션때문에 deadlock이 걸리는 상황을 해결하며 이상적인 풀의 크기를 측정한 [우아한 형제 사례](https://techblog.woowahan.com/2663/)가 있다.
+
+<img width="695" alt="2" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/e4e34e89-3e66-4d08-a5cc-370a505b8dce">
+
+### 그래서 DataSource는 뭔데?
+
+<img width="654" alt="3" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/2f8ab553-af20-4600-bc64-68b7a278ffdd">
+
+예를 들어 위의 그림처럼 애플리케이션 로직에서 DriverManager을 사용하여 커넥션을 획득하다가 HikariCP 같은 커넥션 풀을 사용하도록 변경하면 의존관계가 변경되기 때문에 커넥션을 획득하는 애플리케이션 코드도 변경해야한다. 
+
+따라서 이러한 불편함을 줄이기 위해 커넥션을 획득하는 방법을 추상화하는 `javax.sql.DataSource`라는 인터페이스를 제공한다.
+
+<img width="654" alt="4" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/0675594c-ce87-4135-ba76-34ebbd8667e6">
+
+ `DataSource` 를 통해 커넥션을 획득하는 방법을 추상화했기 때문에 애플리케이션 로직은 `DataSource` 인터페이스에만 의존하면 된다. 덕분에 `DriverManagerDataSource` 를 통해서 `DriverManager`를 사용하다가 커넥션 풀을 사용하도록 코드를 변경해도 애플리케이션 로직은 변경하지 않아도 된다.
+
+### DriverManager 사용할 때
+
+*변경 전*
+
+```java
+Connection con1 = DriverManager.getConnection(URL, USERNAME, PASSWORD);
+Connection con2 = DriverManager.getConnection(URL, USERNAME, PASSWORD);
+```
+
+*DataSource를 사용하는 방식으로 변경 후*
+
+```java
+DriverManagerDataSource dataSource = new DriverManagerDataSource(URL,USERNAME, PASSWORD);
+
+Connection con1 = dataSource.getConnection();
+Connection con2 = dataSource.getConnection();
+```
+
+### 커넥션 풀 사용할 때
+
+```java
+HikariDataSource dataSource = new HikariDataSource(); 
+dataSource.setJdbcUrl(URL);
+dataSource.setUsername(USERNAME); 
+dataSource.setPassword(PASSWORD); 
+dataSource.setMaximumPoolSize(10);
+dataSource.setPoolName("MyPool");
+
+Connection con1 = dataSource.getConnection();
+Connection con2 = dataSource.getConnection();
+```
+
+### DataSource **적용**
+
+DataSource로 connection을 획득하여 사용하는 애플리케이션 로직도 살펴보자.
+
+```java
+public class MemberRepositoryV1 {
+    private final DataSource dataSource;
+    
+    public MemberRepositoryV1(DataSource dataSource) {
+        this.dataSource = dataSource;
+		}
+		
+		//save()
+    //findById()
+    //update()
+    //delete()
+    
+    private void close(Connection con, Statement stmt, ResultSet rs) {
+        JdbcUtils.closeResultSet(rs);
+        JdbcUtils.closeStatement(stmt);
+        JdbcUtils.closeConnection(con);
+		}
+    private Connection getConnection() throws SQLException {
+        Connection con = dataSource.getConnection();
+        log.info("get connection={}, class={}", con, con.getClass());
+        return con;
+		}
+}
+```
+
+위와 같이 레포지토리를 구성하고 외부에서 DataSource를 주입하여 사용할 수 있다. 스프링은 커넥션을 편하게 여닫을 수 있는 `JdbcUtils`라는 편의 메서드를 제공한다.
+
+이제 DriverManagerDataSource → HikariDataSource로 변경해도 **MemberRepositoryV1의 코드는 전혀 변경하지 않아도 된다.** MemberRepositoryV1는 **DataSource 인터페이스에만 의존**하기 때문이다. 이것이 DataSource를 사용하는 장점이다.
+
+***⇒ DI + OCP***
+
+# 3. 트랜잭션의 이해
+
+### 트랜잭션
+
+트랜잭션은 ACID를 보장해야한다. 
+
+하지만 트랜잭션 간에 격리성을 완벽히 보장하려면 트랜잭 션을 거의 순서대로 실행해야 한다. 이렇게 하면 동시 처리 성능이 매우 나빠지기 때문에 ANSI 표준은 트랜 잭션의 격리 수준을 4단계로 나누어 정의했다.
+
+**트랜잭션 격리 수준 - Isolation level**
+
+- READ UNCOMMITED(커밋되지 않은 읽기)
+- READ COMMITTED(커밋된 읽기)
+    
+    > 실제 테이블 값을 가져오는 것이 아니라 Undo 영역에 백업된 레코드에서 값을 가져옴
+    > 
+    
+    Commit이 이루어진 정보만 조회 가능
+    
+    대부분의 SQL 서버가 Default로 사용하는 Isolation Level임
+    
+    <img width="500" alt="7" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/26122231-92a3-4ad2-9a4c-ff96875968d1">
+    
+- REPEATABLE READ(반복 가능한 읽기)
+    
+    > MySQL에서는 트랜잭션마다 트랜잭션 ID를 부여하여 트랜잭션 ID보다 작은 트랜잭션 번호에서 변경한 것만 읽게 함
+    > 
+    
+    트랜잭션이 범위 내에서 조회한 데이터 내용이 항상 동일함을 보장함
+    
+    다른 사용자는 트랜잭션 영역에 해당되는 데이터에 대한 수정 불가능, 하지만 **새로운 행을 추가**할 수 있음
+    
+    <img width="500" alt="7" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/c1ec79c8-dc8f-47e8-8733-c2dce5951bab">
+
+    
+- SERIALIZABLE(직렬화 가능)
+
+### 데이터베이스 연결 구조와 DB 세션
+
+<img width="690" alt="7" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/6be631bf-a605-42d8-bf2f-5ba9a0ec3f40">
+
+
+사용자는 웹 애플리케이션 서버(WAS)나 DB 접근 툴 같은 클라이언트를 사용해서 데이터베이스 서버에 접근할 수 있다. 클라이언트는 데이터베이스 서버에 연결을 요청하고 커넥션을 맺게 된다. 이때 데이터베이스 서버는 내부에 세션이라는 것을 만든다. 그리고 앞으로 해당 커넥션을 통한 모든 요청은 이 세션을 통해서 실행하게 된다.
+
+즉, 개발자가 클라이언트를 통해 SQL을 전달하면 현재 커넥션에 연결된 세션이 SQL을 실행한다.
+
+### 자동 commit, 수동 commit
+
+*자동 commit:*
+
+각각의 쿼리 실행 직후에 자동으로 커밋을 호출하여, 직접 커밋이나 롤백을 호출하지 않아도 되는 장점이 있다. 하지만 쿼리를 하나하나 실행할 때 마다 자동으로 커밋이 되어버리기 때문에 트랜잭션 기능을 제대로 사용할 수 없다.
+
+*수동 commit:*
+
+```sql
+set autocommit false; //수동 커밋 모드 설정
+insert into member(member_id, money) values ('data3',10000);
+insert into member(member_id, money) values ('data4',10000);
+commit; //수동 커밋
+```
+
+보통 자동 커밋 모드가 기본으로 설정된 경우가 많기 때문에, **수동 커밋 모드로 설정하는 것을 트랜잭션을 시작**한다고 표현할 수 있다. 그리고 수동 커밋 설정을 하면 이후에 꼭 `commit` , `rollback` 을 호출해야 한다.
+
+### DB 락
+
+<img width="765" alt="8" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/594e3cbf-afc1-497c-91fa-fdb08928d3b5">
+
+
+```sql
+set autocommit false;
+update member set money=500 where member_id = 'memberA';
+```
+
+세션 1에서 트랜잭션을 시작하고, memberA의 데이터를 500원으로 업데이트 했지만 커밋은 하지 않았다면, memberA 로우의 락은 세션1이 가지게 된다.
+
+<img width="765" alt="9" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/c66037e0-d3f7-4f3a-8b94-4daab9427137">
+
+
+```sql
+SET LOCK_TIMEOUT 60000; --60초 안에 락을 얻지 못하면 예외가 발생
+set autocommit false;
+update member set money=1000 where member_id = 'memberA';
+```
+
+이 때, 세션2가 memberA 의 데이터를 1000원으로 수정하려 해도 세션1이 트랜잭션을 종료하지 않았으므로 락을 가지고 있다. 따라서 세션2가 락을 획득하지 못하기 때문에 데이터를 수정할 수 없고, 락이 돌아올 때까지 대기하게 된다.
+
+<br></br>
+
+하지만 락은 수정 시에만 걸고 있고, **조회할 때는** 락을 획득하지 않고 **바로 데이터를 조회**할 수 있다.  만약 memberA의 금액을 세션1, 세션2에서 동시에 조회하고 값을 차례로 변경한다면, 세션 2에서는 세션 1에서 변경한 값을 무시하게 된다. 이럴 때는 **조회 시점에 락을 획득하여야한다.**
+
+```sql
+select * from member where member_id='memberA' for update;
+```
+
+`select for update` 구문을 사용하면 조회를 하면서 동시에 선택한 로우의 락도 획득하고, 트랜잭션을 종료할 때까지 로우의 락을 보유할 수 있다.
+
+### 트랜잭션 구현
+
+<img width="860" alt="20" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/c8fe20d5-cb8a-41e8-a396-20e67d65700f">
+
+
+트랜잭션은 비즈니스 로직이 있는 서비스 계층에서 시작해야 한다. 비즈니스 로직이 잘못되면 해당 비즈니스 로직
+으로 인해 문제가 되는 부분을 함께 롤백해야 하기 때문이다.
+
+그런데 트랜잭션을 시작하려면 커넥션이 필요하기 때문에, 서비스 계층에서 커넥션을 만들고 트랜잭션 커밋 이후에 커넥션을 종료해야 한다.
+
+또한, 애플리케이션에서 DB 트랜잭션을 사용하려면 같은 세션을 사용해야하므로 **트랜잭션을 사용하는 동안 같은 커넥션을 유지**해야한다.
+
+먼저, 리포지토리가 파라미터를 통해 같은 커넥션을 유지할 수 있도록 파라미터를 추가한다.
+
+```java
+ public class MemberRepositoryV2 {
+ 
+     private final DataSource dataSource;
+     
+     public MemberRepositoryV2(DataSource dataSource) {
+         this.dataSource = dataSource;
+     }
+     
+     public Member findById(Connection con, String memberId) throws SQLException {
+        String sql = "select * from member where member_id = ?";
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+        
+        try {
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            rs = pstmt.executeQuery();
+            
+            if (rs.next()) {
+                Member member = new Member();
+                member.setMemberId(rs.getString("member_id"));
+                member.setMoney(rs.getInt("money"));
+                return member;
+            } else {
+                throw new NoSuchElementException("member not found memberId=" + memberId);
+						}
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+				} finally {
+						//connection은 여기서 닫지 않는다. 
+						JdbcUtils.closeResultSet(rs); 
+						JdbcUtils.closeStatement(pstmt);
+				} 
+		}
+}
+```
+
+그리고 서비스에서 파라미터를 넘기고 트랜잭션을 구성하는 로직을 작성하자.
+
+```java
+@RequiredArgsConstructor
+public class MemberServiceV2 {
+
+    private final DataSource dataSource;
+    private final MemberRepositoryV2 memberRepository;
+
+    public void accountTransfer(String fromId, String toId, int money) throws SQLException, IllegalAccessException {
+        Connection con = dataSource.getConnection();
+
+        try {
+            con.setAutoCommit(false); // 트랜잭션 시작
+
+            // 비즈니스 로직
+            bizLogic(con, fromId, toId, money);
+
+            con.commit(); // 트랜잭션 성공 -> 커밋
+        } catch (Exception e) {
+            con.rollback(); // 트랜잭션 실패 -> 롤백
+            throw new IllegalAccessException();
+        } finally {
+            release(con);
+        }
+
+    }
+
+    private void bizLogic(Connection con, String fromId, String toId, int money) throws SQLException, IllegalAccessException {
+        Member fromMember = memberRepository.findById(con, fromId);
+        Member toMember = memberRepository.findById(con, toId);
+
+        memberRepository.update(con, fromId, fromMember.getMoney() - money);
+        validation(toMember);
+        memberRepository.update(con, toId, toMember.getMoney() + money);
+    }
+
+    private static void release(Connection con) {
+        if (con != null){
+            try {
+                con.setAutoCommit(true); // 커넥션이 풀에 돌아가므로 문제를 예방하기 위해 true로 세팅
+                con.close(); // 커넥션 풀 사용하고 있으므로 커넥션이 종료되는 것이 아니라 풀에 반납
+            } catch (Exception e){
+                log.info("error", e);
+            }
+        }
+    }
+
+    private static void validation(Member toMember) throws IllegalAccessException {
+        if (toMember.getMemberId().equals("ex")){
+            throw new IllegalAccessException("이체중 예외");
+        }
+    }
+}
+```
+
+위와 같이 애플리케이션에서 DB 트랜잭션을 적용할 수 있지만, 서비스 계층이 매우 지저분해지고, 생각보다 매우 복잡한 코드를 요구한다. 스프링을 이용하여 이와 같은 문제를 해결할 수 있다.
