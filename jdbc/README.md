@@ -412,3 +412,132 @@ public class MemberServiceV2 {
 ```
 
 위와 같이 애플리케이션에서 DB 트랜잭션을 적용할 수 있지만, 서비스 계층이 매우 지저분해지고, 생각보다 매우 복잡한 코드를 요구한다. 스프링을 이용하여 이와 같은 문제를 해결할 수 있다.
+
+# 4. 스프링과 문제 해결 - 트랜잭션
+
+### 문제점들
+
+컨트롤러 계층, 서비스 계층, 리포지토리 계층에서 가장 중요한 부분은 서비스 계층이다. 데이터 기술을 변경하든, 웹 기술이 변경되어도 비즈니스 로직을 담당하는 서비스 계층은 최대한 변경없이 유지되어야 한다. 그래서 서비스 계층을 **특정 기술에 종속적이지 않게 개발해야 한다.**
+
+<br></br>
+
+하지만 트랜잭션을 적용한 MemberServiceV2 코드는 `javax.sql.DataSource`, `java.sql.Connection`, `java.sql.SQLException`같은 JDBC 기술에 의존하고 있고, 핵심 비즈니스 로직과 JDBC 기술이 섞여 있어서 유지보수 하기 어렵다.
+
+<br></br>
+
+즉, 트랜잭션을 적용하기 위해 JDBC 구현 기술이 서비스 계층에 누수되었고,
+
+같은 트랜잭션을 유지하기 위해 커넥션을 파라미터로 넘겨야 하고,
+
+트랜잭션 적용 코드를 보면 반복이 많고,
+
+데이터 접근 계층의 JDBC 구현 기술 예외가 서비스 계층으로 전파되는 문제점들을 가지고 있다.
+
+### 트랜잭션 추상화
+
+먼저, 서비스 계층이 트랜잭션을 사용하기 위해서 JDBC 기술에 의존하고 있는 문제를 해결하자.
+
+<img width="715" alt="1" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/003b19bf-d8f5-4ff8-bc2f-da7a700ca3b8">
+
+JDBC, JPA, 하이버네이트 등 다양한 데이터 접근 기술들은 트랜잭션을 사용하는 코드들이 다르다.
+
+하지만 다행히도 스프링은 이것들을 추상화한 `PlatformTransactionManager`인터페이스를 제공한다.
+
+### 트랜잭션 동기화
+
+트랜잭션 매니저 `PlatformTransactionManager`는 크게 2가지 기능을 제공한다.
+
+- 트랜잭션 추상화
+- 리소스 동기화
+
+<img width="717" alt="2" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/f5693441-915c-4406-9cfc-63bac45daa4f">
+
+
+트랜잭션을 유지하려면 트랜잭션의 시작부터 끝까지 같은 데이터베이스 커넥션을 유지해야하기 때문에 스프링은 **트랜잭션 동기화 매니저**를 제공한다. 이것은 스레드 로컬(`ThreadLocal`)을 사용해서 커넥션을 동기
+화해준다. 그리고 트랜잭션 매니저는 내부에서 이 트랜잭션 동기화 매니저를 사용한다.
+
+### 트랜잭션 매니저의 전체 동작흐름
+
+<img width="712" alt="3" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/11501090-4dad-4b7a-bb15-ab5f15963f4f">
+
+
+1. 서비스 계층에서 `transactionManager.getTransaction()`을 호출해서 트랜잭션을 시작한다.
+2. 트랜잭션을 시작하려면 먼저 데이터베이스 커넥션이 필요하다. 트랜잭션 매니저는 내부에서 데이터소스를 사용해서 커넥션을 생성한다.
+3. 커넥션을 **수동 커밋 모드로 변경**해서 실제 데이터베이스 트랜잭션을 시작한다.
+4. 커넥션을 트랜잭션 동기화 매니저에 보관한다.
+5. 트랜잭션 동기화 매니저는 쓰레드 로컬에 커넥션을 보관한다. 따라서 멀티 쓰레드 환경에 안전하게 커넥션을 보관할 수 있다.
+
+<img width="712" alt="4" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/6c4e0fa4-ac06-48dc-85aa-0c2b97e378ab">
+
+
+1. 서비스는 비즈니스 로직을 실행하면서 리포지토리의 메서드들을 호출한다. 이때 커넥션을 파라미터로 전달하지않는다.
+2. 리포지토리 메서드들은 트랜잭션이 시작된 커넥션이 필요하다. 리포지토리는 `DataSourceUtils.getConnection()`을 사용해서 트랜잭션 동기화 매니저에 보관된 커넥션을 꺼내서 사용한다. 이 과정을 통해서 자연스럽게 같은 커넥션을 사용하고, 트랜잭션도 유지된다.
+    
+    ** `DataSourceUtils`를 따라가다 보면 `TransactionSynchronizationManager`를 사용해서 동기화를 보장하는 것을 알 수 있다
+    
+    <img width="898" alt="5" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/f0363240-1fe5-466b-a68d-d45e095602c5">
+
+    
+3. 획득한 커넥션을 사용해서 SQL을 데이터베이스에 전달해서 실행한다.
+
+<img width="712" alt="6" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/08a11d54-bf77-4001-b8db-717015101f0f">
+
+1. 비즈니스 로직이 끝나고 트랜잭션을 종료한다. 트랜잭션은 커밋하거나 롤백하면 종료된다.
+2. 트랜잭션을 종료하려면 동기화된 커넥션이 필요하다. 트랜잭션 동기화 매니저를 통해 동기화된 커넥션을 획득한다.
+3. 획득한 커넥션을 통해 데이터베이스에 트랜잭션을 커밋하거나 롤백한다.
+4. 전체 리소스를 정리한다.
+    - 트랜잭션 동기화 매니저를 정리한다. 쓰레드 로컬은 사용후 꼭 정리해야 한다.
+    - `con.setAutoCommit(true)`로 되돌린다. 커넥션 풀을 고려해야 한다.
+    - `con.close()`를 호출해셔 커넥션을 종료한다. 커넥션 풀을 사용하는 경우 `con.close()`를 호출하면 커넥션 풀에 반환된다.
+
+### 트랜잭션 매니저 사용 코드
+
+```java
+//트랜잭션 시작
+TransactionStatus status = transactionManager.getTransaction(new DefaultTransactionDefinition());
+
+try {
+//비즈니스 로직
+     bizLogic(fromId, toId, money);
+		 transactionManager.commit(status); //성공시 커밋 
+		} catch (Exception e) {
+		 transactionManager.rollback(status); //실패시 롤백
+     throw new IllegalStateException(e);
+ }
+```
+
+여기서는 트랜잭션을 시작하고, 비즈니스 로직을 실행하고, 성공하면 커밋하고, 예외가 발생해서 실패하면 롤백하는 코드가 반복됨을 확인할 수 있다.
+
+스프링에서는 **템플릿 콜백 메서드를** 활용하여 반복을 제거하는 **트랜잭션 템플릿**을 제공한다.
+
+### 트랜잭션 템플릿 사용 코드
+
+```java
+txTemplate.executeWithoutResult((status) -> {
+     try {
+					//비즈니스 로직
+         bizLogic(fromId, toId, money);
+     } catch (SQLException e) {
+         throw new IllegalStateException(e);
+     }
+});
+```
+
+트랜잭션 템플릿 덕분에, 트랜잭션을 사용할 때 반복하는 코드를 제거할 수 있다. 하지만 이곳은 서비스 로직인데 비즈니스 로직 뿐만 아니라 트랜잭션을 처리하는 기술 로직이 함께 포함되어 있다.
+
+### **트랜잭션 문제 해결** - **트랜잭션** AOP **이해**
+
+<img width="720" alt="7" src="https://github.com/yj-leez/inflearn-spring-study/assets/77960090/846df0c4-e7fa-4521-abfa-23954d5e1008">
+
+
+
+프록시를 사용하여 트랜잭션을 처리하는 객체와 비즈니스 로직을 처리하는 서비스 객체를 명확하게 분리할 수 있다. 스프링이 AOP를 통해 프록시를 도입해서 트랜잭션을 편리하게 처리해주는 `@Transactional`을 사용하자.
+
+```java
+@Transactional
+public void accountTransfer(String fromId, String toId, int money) throws SQLException {
+    bizLogic(fromId, toId, money);
+}
+```
+
+이렇게 비즈니스 로직과 트랜잭션을 처리하는 로직을 분리할 수 있었다. 하지만 주의해야 할 점이 있는데, `@Transactional`은 스프링 AOP를 기반으로 동작하고, 스프링 AOP는 Spring container에 등록된 빈을 찾아서 사용하기 때문에 Service, transactionManager를 빈에 등록해야하고 Service에 주입되는 DataSource도 등록해야한다.
